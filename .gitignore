@@ -1,0 +1,21 @@
+.tgcloud/
+node_modules/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Generated audit bundle
+review-source.txt
+
+# Local backups
+backup-episode-order-*/
+edit-series-backup/
+
+# Editor and timestamped source backups
+*.bak
+*.before-*.bak
+
+# Backup files
+*.bak
