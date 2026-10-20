@@ -302,6 +302,7 @@ export async function prepareReplacementUpload(
   title,
   seasonNumber,
   quality,
+  partNumber = 0,
 ) {
   if (
     !Number.isSafeInteger(ownerUserId) ||
@@ -310,6 +311,8 @@ export async function prepareReplacementUpload(
     !title.trim() ||
     !Number.isSafeInteger(seasonNumber) ||
     seasonNumber < 1 ||
+    !Number.isSafeInteger(partNumber) ||
+    partNumber < 0 ||
     typeof quality !== 'string' ||
     !quality.trim()
   ) {
@@ -347,13 +350,14 @@ export async function prepareReplacementUpload(
   const section = matchingSections.find(
     (item) =>
       item.seasonNumber === seasonNumber &&
+      (item.partNumber ?? 0) === partNumber &&
       item.quality.toLowerCase() === quality.trim().toLowerCase() &&
       item.published === true,
   );
 
   if (!section) {
     throw new Error(
-      'Published season and quality not found. Check the title, season, and quality.',
+      'Published season part and quality not found. Check the title, season, part, and quality.',
     );
   }
 
@@ -488,7 +492,8 @@ export async function prepareAppendEpisodeUpload(
     !draft ||
     draft.ownerChatId !== ownerChatId ||
     draft.step !== 'edit_add_episode_quality' ||
-    !draft.title
+    !draft.title ||
+    !Number.isSafeInteger(draft.seasonNumber)
   ) {
     throw new Error('Your episode-append selection expired. Start again from Edit Series.');
   }
@@ -509,40 +514,31 @@ export async function prepareAppendEpisodeUpload(
     .all();
 
   const seriesRecord = matches.find(
-    (item) => item.published === true && item.status === 'ongoing',
+    (item) =>
+      item.published === true &&
+      (!Number.isSafeInteger(draft.seriesId) || item.id === draft.seriesId),
   );
 
   if (!seriesRecord) {
-    throw new Error('Published ongoing series not found.');
+    throw new Error('Published series not found.');
   }
 
-  const allSections = await db
+  const matchingSections = await db
     .select()
     .from(sections)
     .where(eq(sections.seriesId, seriesRecord.id))
     .all();
 
-  const publishedSections = allSections.filter(
-    (item) => item.published === true,
-  );
-
-  if (publishedSections.length === 0) {
-    throw new Error('This series has no published season or quality yet.');
-  }
-
-  const latestSeason = Math.max(
-    ...publishedSections.map((item) => item.seasonNumber),
-  );
-
-  const section = publishedSections.find(
+  const section = matchingSections.find(
     (item) =>
       item.id === sectionId &&
-      item.seasonNumber === latestSeason,
+      item.seasonNumber === draft.seasonNumber &&
+      item.published === true,
   );
 
   if (!section) {
     throw new Error(
-      'That quality is not part of the latest published season. Start the selection again.',
+      'That quality is not part of the selected published season. Start the selection again.',
     );
   }
 

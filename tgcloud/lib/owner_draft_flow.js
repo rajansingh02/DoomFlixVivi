@@ -126,46 +126,35 @@ export async function handleOwnerDraftMessage(message) {
       return true;
     }
 
-    const seriesRecord = {
-      title: match.title,
-      status: match.status,
-    };
-
     await updateOwnerDraft(userId, {
-      title: seriesRecord.title,
+      title: match.title,
+      seriesId: match.seriesId,
+      sectionId: null,
+      seasonNumber: null,
+      quality: null,
       step: 'edit_action',
     });
 
     await api.sendMessage({
-  chat_id: chat.id,
-  text: `Found: ${seriesRecord.title}\n\nWhat would you like to do?`,
-  reply_markup: {
-    inline_keyboard: [
-      [
-        {
-          text: '➕ Add Season / Quality',
-          callback_data: 'editseries:addseason',
-        },
-      ],
-      [
-        {
-          text: '♻️ Edit Existing Season',
-          callback_data: 'editseries:editseason',
-        },
-      ],
-      ...(seriesRecord.status === 'ongoing'
-        ? [
-            [
-              {
-                text: '➕ Add New Episode',
-                callback_data: 'editseries:add_episode',
-              },
-            ],
-          ]
-        : []),
-    ],
-  },
-});
+      chat_id: chat.id,
+      text: `Found: ${match.title}\n\nWhat would you like to do?`,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: '➕ Add Season / Quality',
+              callback_data: 'editseries:addseason',
+            },
+          ],
+          [
+            {
+              text: '♻️ Edit Existing Season',
+              callback_data: 'editseries:editseason',
+            },
+          ],
+        ],
+      },
+    });
 
     return true;
   }

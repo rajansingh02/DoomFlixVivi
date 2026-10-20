@@ -16,9 +16,11 @@ const VALID_STEPS = [
   'sinfo_title',
   'sinfo_status',
   'edit_action',
+  'edit_season_action',
   'edit_add_season',
   'edit_add_quality',
   'edit_add_episode_quality',
+  'edit_add_part_quality',
 ];
 
 export async function getOwnerDraft(ownerUserId) {

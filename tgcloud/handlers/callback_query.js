@@ -401,9 +401,11 @@ export default async function (callbackQuery, ctx) {
     if (
       data.startsWith('editseries:') ||
       data.startsWith('editseason:') ||
+      data.startsWith('editseasonaction:') ||
       data.startsWith('editreplace:') ||
       data.startsWith('editaddquality:') ||
-      data.startsWith('editappendquality:')
+      data.startsWith('editappendquality:') ||
+      data.startsWith('editpartquality:')
     ) {
       if (
         !isOwner(userId) ||
@@ -453,12 +455,10 @@ export default async function (callbackQuery, ctx) {
           .from(series)
           .where(eq(series.normalizedTitle, normalizedTitle))
           .all();
-        const seriesRecord = matches.find(
-          (item) => item.published === true && item.status === 'ongoing',
-        );
+        const seriesRecord = matches.find((item) => item.published === true);
 
         if (!seriesRecord) {
-          await answer('Add New Episode is only available for a published ongoing series.');
+          await answer('Published series not found.');
           return;
         }
 
@@ -476,28 +476,18 @@ export default async function (callbackQuery, ctx) {
           return;
         }
 
-        const latestSeason = Math.max(
-          ...publishedSections.map((item) => item.seasonNumber),
-        );
-        const latestSections = publishedSections
-          .filter((item) => item.seasonNumber === latestSeason)
-          .sort((a, b) => a.quality.localeCompare(b.quality));
+        const seasonNumbers = [...new Set(
+          publishedSections.map((item) => item.seasonNumber),
+        )].sort((a, b) => a - b);
 
-        await updateOwnerDraft(userId, {
-          step: 'edit_add_episode_quality',
-          seasonNumber: latestSeason,
-          quality: null,
-        });
-
-        await answer(`Choose a quality from Season ${latestSeason}.`);
+        await answer('Choose a season.');
         await editSelection(
           `${seriesRecord.title}\n\n` +
-            `Latest published season: ${latestSeason}\n` +
-            'Choose the existing quality to add episodes to:',
+            'Choose the season to add episodes to:',
           {
-            inline_keyboard: latestSections.map((section) => [{
-              text: section.quality,
-              callback_data: `editappendquality:${section.id}`,
+            inline_keyboard: seasonNumbers.map((seasonNumber) => [{
+              text: `Season ${seasonNumber}`,
+              callback_data: `editseason:${seriesRecord.id}:${seasonNumber}`,
             }]),
           },
         );
@@ -574,9 +564,12 @@ export default async function (callbackQuery, ctx) {
 
           await answer('Add-episode upload prepared.');
           await editSelection(
-            '➕ Add New Episode — upload prepared\n\n' +
+            '➕ Add Episodes — upload prepared\n\n' +
               `Series: ${result.series.title}\n` +
               `Season: ${result.section.seasonNumber}\n` +
+              (result.section.partNumber > 0
+                ? `Part: ${result.section.partNumber}\n`
+                : '') +
               `Quality: ${result.section.quality}\n\n` +
               'Send the new episode files in this private chat.\n' +
               'Send /done to review the batch.\n' +
@@ -702,23 +695,238 @@ export default async function (callbackQuery, ctx) {
 
       const seasonSections = matchingSections
         .filter((item) => item.seasonNumber === seasonNumber && item.published === true)
-        .sort((a, b) => a.quality.localeCompare(b.quality));
+        .sort((a, b) =>
+          (a.partNumber ?? 0) - (b.partNumber ?? 0) ||
+          a.quality.localeCompare(b.quality),
+        );
 
       if (seasonSections.length === 0) {
         await answer('No published qualities found for that season.');
         return;
       }
 
+      await updateOwnerDraft(userId, {
+        step: 'edit_season_action',
+        seriesId,
+        seasonNumber,
+        sectionId: null,
+        quality: null,
+      });
+
       await answer(`Season ${seasonNumber} selected.`);
       await editSelection(
-        `${seriesRecord.title} — Season ${seasonNumber}\n\nChoose the quality to replace:`,
+        `${seriesRecord.title} — Season ${seasonNumber}\n\n` +
+          'Choose what to do:\n' +
+          '• Add episodes to one existing quality\n' +
+          '• Add a numbered part to this season\n' +
+          '• Replace an existing quality',
+        {
+          inline_keyboard: [
+            [{
+              text: '➕ Add Episodes',
+              callback_data: 'editseasonaction:append',
+            }],
+            [{
+              text: '➕ Add Numbered Part',
+              callback_data: 'editseasonaction:part',
+            }],
+            [{
+              text: '♻️ Replace Quality',
+              callback_data: 'editseasonaction:replace',
+            }],
+          ],
+        },
+      );
+      return;
+    }
+
+    if (data.startsWith('editseasonaction:')) {
+      if (
+        !isOwner(userId) ||
+        userId !== 924952328 ||
+        message?.chat?.type !== 'private'
+      ) {
+        await answer('This action is only available to the bot owner in private chat.');
+        return;
+      }
+
+      const draft = await getOwnerDraft(userId);
+      const action = data.slice('editseasonaction:'.length);
+
+      if (
+        !draft ||
+        draft.ownerChatId !== message.chat.id ||
+        draft.step !== 'edit_season_action' ||
+        !Number.isSafeInteger(draft.seriesId) ||
+        !Number.isSafeInteger(draft.seasonNumber) ||
+        !['append', 'part', 'replace'].includes(action)
+      ) {
+        await answer('This season-edit selection has expired.');
+        return;
+      }
+
+      const matchingSections = await db
+        .select()
+        .from(sections)
+        .where(eq(sections.seriesId, draft.seriesId))
+        .all();
+      const seasonSections = matchingSections
+        .filter(
+          (section) =>
+            section.seasonNumber === draft.seasonNumber &&
+            section.published === true,
+        )
+        .sort((a, b) =>
+          (a.partNumber ?? 0) - (b.partNumber ?? 0) ||
+          a.quality.localeCompare(b.quality),
+        );
+
+      if (seasonSections.length === 0) {
+        await answer('No published qualities were found for this season.');
+        return;
+      }
+
+      if (action === 'append') {
+        await updateOwnerDraft(userId, {
+          step: 'edit_add_episode_quality',
+        });
+        await answer('Choose the quality to add episodes to.');
+        await editSelection(
+          `Season ${draft.seasonNumber}\n\nChoose an existing quality:`,
+          {
+            inline_keyboard: seasonSections.map((section) => [{
+              text:
+                `${(section.partNumber ?? 0) > 0 ? `Part ${section.partNumber} — ` : ''}` +
+                section.quality,
+              callback_data: `editappendquality:${section.id}`,
+            }]),
+          },
+        );
+        return;
+      }
+
+      if (action === 'part') {
+        const qualities = [...new Set(
+          seasonSections.map((section) => section.quality),
+        )].sort((a, b) => a.localeCompare(b));
+        await updateOwnerDraft(userId, {
+          step: 'edit_add_part_quality',
+        });
+        await answer('Choose the quality for the new part.');
+        await editSelection(
+          `Season ${draft.seasonNumber}\n\nChoose the quality for the new numbered part:`,
+          {
+            inline_keyboard: qualities.map((quality) => [{
+              text: quality,
+              callback_data: `editpartquality:${quality}`,
+            }]),
+          },
+        );
+        return;
+      }
+
+      await answer('Choose the quality to replace.');
+      await editSelection(
+        `Season ${draft.seasonNumber}\n\nChoose the quality to replace:`,
         {
           inline_keyboard: seasonSections.map((section) => [{
-            text: section.quality,
-            callback_data: `editreplace:${seriesId}:${section.id}`,
+            text:
+              `${(section.partNumber ?? 0) > 0 ? `Part ${section.partNumber} — ` : ''}` +
+              section.quality,
+            callback_data: `editreplace:${draft.seriesId}:${section.id}`,
           }]),
         },
       );
+      return;
+    }
+
+    if (data.startsWith('editpartquality:')) {
+      if (
+        !isOwner(userId) ||
+        userId !== 924952328 ||
+        message?.chat?.type !== 'private'
+      ) {
+        await answer('This action is only available to the bot owner in private chat.');
+        return;
+      }
+
+      const draft = await getOwnerDraft(userId);
+      const quality = data.slice('editpartquality:'.length);
+
+      if (
+        !draft ||
+        draft.ownerChatId !== message.chat.id ||
+        draft.step !== 'edit_add_part_quality' ||
+        !Number.isSafeInteger(draft.seriesId) ||
+        !Number.isSafeInteger(draft.seasonNumber) ||
+        !quality
+      ) {
+        await answer('This part-quality selection has expired.');
+        return;
+      }
+
+      const matchingSections = await db
+        .select()
+        .from(sections)
+        .where(eq(sections.seriesId, draft.seriesId))
+        .all();
+      const qualityExists = matchingSections.some(
+        (section) =>
+          section.seasonNumber === draft.seasonNumber &&
+          section.quality === quality &&
+          section.published === true,
+      );
+
+      if (!qualityExists) {
+        await answer('That quality is no longer available for this season.');
+        return;
+      }
+
+      const nextPartNumber = Math.max(
+        0,
+        ...matchingSections
+          .filter((section) => section.seasonNumber === draft.seasonNumber)
+          .map((section) => section.partNumber ?? 0),
+      ) + 1;
+
+      if (!Number.isSafeInteger(nextPartNumber)) {
+        await answer('Could not determine the next part number.');
+        return;
+      }
+
+      try {
+        await updateOwnerDraft(userId, {
+          quality,
+          sectionId: null,
+          step: 'part_identifier',
+        });
+        const result = await prepareSeriesPartUpload(
+          userId,
+          message.chat.id,
+          draft.seasonNumber,
+          nextPartNumber,
+        );
+
+        await answer(`Season ${draft.seasonNumber} Part ${nextPartNumber} upload prepared.`);
+        await editSelection(
+          `📦 Season ${draft.seasonNumber} — Part ${nextPartNumber} upload prepared\n\n` +
+            `Series: ${result.series.title}\n` +
+            `Quality: ${result.section.quality}\n\n` +
+            'Send the episode files for this part in this private chat.\n' +
+            'Send /done to review this part, then /confirm to publish it.\n' +
+            'After confirmation, you can add another part or finish part entry.',
+          { inline_keyboard: [] },
+        );
+      } catch (error) {
+        await answer('Could not prepare the new part.');
+        await api.sendMessage({
+          chat_id: message.chat.id,
+          text:
+            `Could not prepare Season ${draft.seasonNumber} — Part ${nextPartNumber}: ` +
+            `${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
+            'Your existing published episodes have not been changed.',
+        });
+      }
       return;
     }
 
@@ -769,6 +977,7 @@ export default async function (callbackQuery, ctx) {
           seriesRecord.title,
           section.seasonNumber,
           section.quality,
+          section.partNumber ?? 0,
         );
 
         let cleanupWarning = false;
@@ -783,6 +992,9 @@ export default async function (callbackQuery, ctx) {
           '♻️ Replacement upload prepared\n\n' +
             `Series: ${result.series.title}\n` +
             `Season: ${result.section.seasonNumber}\n` +
+            (result.section.partNumber > 0
+              ? `Part: ${result.section.partNumber}\n`
+              : '') +
             `Quality: ${result.section.quality}\n\n` +
             'Send the replacement episode files in this private chat.\n' +
             'Send /done to review the batch, then /confirm to publish it.\n' +
